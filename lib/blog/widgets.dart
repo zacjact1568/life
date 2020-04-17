@@ -1,6 +1,7 @@
-import 'dart:math';
-
 import 'package:flutter/material.dart';
+
+import 'models.dart';
+import 'network.dart';
 
 class BlogWidget extends StatelessWidget {
   @override
@@ -14,40 +15,35 @@ class PostListWidget extends StatefulWidget {
 
 class PostListState extends State<PostListWidget> {
 
-  final nums = [];
+  final postList = <Post>[];
 
   static const _postTitleStyle = TextStyle(fontSize: 18.0);
 
   Widget _buildPostList() {
     return ListView.builder(
-        itemCount: nums.length * 2,
-        itemBuilder: (context, i) {
-          if (i.isOdd) return Divider();
-          final seq = i ~/ 2;
-          return _buildPostItem(nums[seq]);
-        }
+      itemCount: postList.length * 2,
+      itemBuilder: (context, i) {
+        if (i.isOdd) return Divider();
+        final seq = i ~/ 2;
+        return _buildPostItem(postList[seq]);
+      }
     );
   }
 
-  Widget _buildPostItem(int seq) {
+  Widget _buildPostItem(Post post) {
     return ListTile(
       title: Text(
-        seq.toString(),
+        post.title,
         style: _postTitleStyle,
       ),
     );
   }
 
   Future<void> _refresh() async {
-    // TODO 从网络加载数据
-    int next = await _fakeDelay();
+    final newPostList = await getPostList();
     setState(() {
-      nums.add(next);
+      postList.replaceRange(0, postList.length, newPostList);
     });
-  }
-
-  Future<int> _fakeDelay() {
-    return Future.delayed(Duration(seconds: 1), () => Random().nextInt(10));
   }
 
   @override
