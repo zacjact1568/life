@@ -3,9 +3,12 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'package:life/util/secret.dart' show token;
-import 'models.dart';
+import 'package:life/util/time.dart';
+import 'package:life/util/model.dart';
+import 'manager.dart';
 
-Future<PostListPack> getPostList({int page}) async {
+Future<Pack<Post>> getPostListFromNetwork(int page) async {
+  // TODO 处理非服务器问题（e.g. 无网络、连接不上）
   final response = await http.get(
     'https://life.zackzhang.net/blog/get-post-list/?page=$page',
     headers: {'Authorization': 'Token $token'}
@@ -23,20 +26,10 @@ Future<PostListPack> getPostList({int page}) async {
     // 声明空集合时必须指定类型，不然会推断成 dynamic
     final postList = <Post>[];
     for (var postMap in postMapList) {
-      postList.add(Post.fromMap(postMap));
+      postList.add(Post.fromMap(postMap, DateTimeStringType.NETWORK));
     }
-    return PostListPack.successful(responseMap['count'], postList);
+    return Pack<Post>.successful(responseMap['count'], postList);
   } else {
-    return PostListPack.failed('$statusCode：${responseMap['detail']}');
+    return Pack<Post>.failed('网络请求失败\n$statusCode：${responseMap['detail']}');
   }
-}
-
-class PostListPack {
-  int totalCount;
-  List<Post> partialPostList;
-  String error;
-
-  PostListPack.successful(this.totalCount, this.partialPostList);
-
-  PostListPack.failed(this.error);
 }

@@ -1,24 +1,27 @@
 import 'package:flutter/material.dart';
 
-import 'models.dart';
-import 'network.dart';
+import 'model/manager.dart';
 
-/// 下拉刷新的状态
-enum RefreshingStatus {
-  // 初始闲置
+/// 刷新的状态
+enum _RefreshingStatus {
+  // 闲置（起始状态）
   INIT_IDLE,
-  // 初始刷新
+  // 首次、初始刷新中（全屏圆形加载指示器，不显示列表）
   INIT_REFRESHING,
-  // 初始刷新失败
+  // 首次刷新失败（全屏中心重试按钮）
   INIT_FAILED,
-  // 列表闲置（初始刷新成功）
+  // 列表闲置（显示列表）
+  // 可能是：
+  // 首次、初始、列表刷新成功
+  // 初始刷新失败（回退显示数据库数据）
+  // 列表刷新失败（不作任何改变）
   LIST_IDLE,
-  // 列表刷新
+  // 列表刷新中（RefreshIndicator 自动显示下拉刷新指示器，不需要响应此状态变化）
   LIST_REFRESHING,
 }
 
-/// 上拉加载更多的状态
-enum LoadingMoreStatus {
+/// 加载更多的状态
+enum _LoadingMoreStatus {
   // 闲置
   IDLE,
   // 加载中
@@ -45,8 +48,8 @@ class PostListState extends State<PostListWidget> {
 
   final _postList = <Post>[];
 
-  var _refreshingStatus = RefreshingStatus.INIT_IDLE;
-  var _loadingMoreStatus = LoadingMoreStatus.IDLE;
+  var _refreshingStatus = _RefreshingStatus.INIT_IDLE;
+  var _loadingMoreStatus = _LoadingMoreStatus.IDLE;
 
   int _lastPage = 0;
 
@@ -69,11 +72,11 @@ class PostListState extends State<PostListWidget> {
   @override
   Widget build(BuildContext context) {
     switch (_refreshingStatus) {
-      case RefreshingStatus.INIT_REFRESHING:
+      case _RefreshingStatus.INIT_REFRESHING:
         // 初始刷新中
         // 显示圆形加载指示器
         return CircularProgressIndicator();
-      case RefreshingStatus.INIT_FAILED:
+      case _RefreshingStatus.INIT_FAILED:
         // 初始刷新失败
         // 显示重新加载按钮
         return Center(
@@ -83,8 +86,8 @@ class PostListState extends State<PostListWidget> {
             child: Text('重试'),
           ),
         );
-      case RefreshingStatus.LIST_IDLE:
-      case RefreshingStatus.LIST_REFRESHING:
+      case _RefreshingStatus.LIST_IDLE:
+      case _RefreshingStatus.LIST_REFRESHING:
         // 初始刷新成功，或正在刷新（RefreshIndicator 有刷新动画）
         // 显示列表
         return RefreshIndicator(
@@ -92,13 +95,14 @@ class PostListState extends State<PostListWidget> {
           onRefresh: _refresh,
         );
       default:
-        throw Exception('Unknown status in build');
+        throw ArgumentError.value(_refreshingStatus, '_refreshingStatus');
     }
   }
 
   @override
   void dispose() {
     _scrollController.removeListener(_scrollListener);
+    // TODO 如果在刷新或加载更多，停止
     super.dispose();
   }
 
@@ -171,7 +175,7 @@ class PostListState extends State<PostListWidget> {
                   ),
                   const Padding(padding: EdgeInsets.only(left: 3.0)),
                   Text(
-                    post.createdAt,
+                    post.creationDate,
                     style: const TextStyle(
                       fontSize: 14.0,
                       color: Colors.black38,
@@ -189,114 +193,133 @@ class PostListState extends State<PostListWidget> {
 
   Widget _buildLoadingMoreArea() {
     switch (_loadingMoreStatus) {
-      case LoadingMoreStatus.IDLE:
-      case LoadingMoreStatus.NEW_LIST:
+      case _LoadingMoreStatus.IDLE:
+      case _LoadingMoreStatus.NEW_LIST:
         // 闲置状态或成功加载新数据
         return Text('上拉加载更多');
-      case LoadingMoreStatus.LOADING:
+      case _LoadingMoreStatus.LOADING:
         // 加载中
         return CircularProgressIndicator();
-      case LoadingMoreStatus.FAILED:
+      case _LoadingMoreStatus.FAILED:
         // 加载失败
         return Text('上拉再次尝试加载');
-      case LoadingMoreStatus.NO_MORE:
+      case _LoadingMoreStatus.NO_MORE:
         // 加载完成
         return Text('共 ${_postList.length} 篇文章');
       default:
-        throw Exception('Unknown status in _buildLoadingArea');
+        throw ArgumentError.value(_loadingMoreStatus, '_loadingMoreStatus');
     }
   }
 
-  /// 下拉刷新
+  /// 刷新
   Future<void> _refresh() async {
     // 如果在加载更多，不响应
-    if (_loadingMoreStatus == LoadingMoreStatus.LOADING) return;
+    if (_loadingMoreStatus == _LoadingMoreStatus.LOADING) return;
     // 此时 _refreshingStatus 只可能是 INIT_IDLE 或 INIT_FAILED 或 LIST_IDLE
     setState(() {
-      if (_refreshingStatus == RefreshingStatus.INIT_IDLE
-          || _refreshingStatus == RefreshingStatus.INIT_FAILED) {
+      if (_refreshingStatus == _RefreshingStatus.INIT_IDLE
+          || _refreshingStatus == _RefreshingStatus.INIT_FAILED) {
         // 如果当前为初始闲置或初始失败状态
         // 切换为初始刷新
-        _refreshingStatus = RefreshingStatus.INIT_REFRESHING;
+        _refreshingStatus = _RefreshingStatus.INIT_REFRESHING;
       } else {
         // 如果当前为列表闲置状态
         // 切换为列表刷新
         // PS：可以不包含在 setState 中
         // 因为没有 Widget 状态的切换是依赖 LIST_REFRESHING 的
-        _refreshingStatus = RefreshingStatus.LIST_REFRESHING;
+        _refreshingStatus = _RefreshingStatus.LIST_REFRESHING;
       }
     });
-    // 始终请求第一页
-    final pack = await getPostList(page: 1);
     // 此时 _refreshingStatus 只可能是 INIT_REFRESHING 或 LIST_REFRESHING
+    // 始终请求第一页
+    final pack = await getPostList(1, _refreshingStatus == _RefreshingStatus.INIT_REFRESHING);
     setState(() {
-      if (pack.error == null) {
+      if (pack.partialList != null) {
         // 刷新成功
-        _postList.replaceRange(0, _postList.length, pack.partialPostList);
+        // 可能是一次性网络或数据库成功
+        // 或网络失败后，从数据库中取得缓存
+        _postList.replaceRange(0, _postList.length, pack.partialList);
         if (_postList.length == pack.totalCount) {
           // 说明数据已全部加载（只有一页）
-          _loadingMoreStatus = LoadingMoreStatus.NO_MORE;
+          _loadingMoreStatus = _LoadingMoreStatus.NO_MORE;
         } else {
           // 否则需要恢复未全部加载的状态
           // 否则当数据全部加载后再刷新
           // 底部 LoadingArea 不会变（共 * 篇文章）
-          _loadingMoreStatus = LoadingMoreStatus.IDLE;
+          _loadingMoreStatus = _LoadingMoreStatus.IDLE;
         }
         // 无论是初始刷新还是列表刷新，都切换为列表闲置状态
-        _refreshingStatus = RefreshingStatus.LIST_IDLE;
+        _refreshingStatus = _RefreshingStatus.LIST_IDLE;
         // 页数设为第一页
         _lastPage = 1;
       } else {
         // 刷新失败
-        // 如果是初始刷新，切换为初始失败
-        if (_refreshingStatus == RefreshingStatus.INIT_REFRESHING) {
-          _refreshingStatus = RefreshingStatus.INIT_FAILED;
+        // 可能是网络失败后，数据库中也没有缓存
+        if (_refreshingStatus == _RefreshingStatus.INIT_REFRESHING) {
+          // 如果是初始刷新，切换为初始失败
+          _refreshingStatus = _RefreshingStatus.INIT_FAILED;
+        } else {
+          // 如果是列表刷新，切换为列表闲置
+          _refreshingStatus = _RefreshingStatus.LIST_IDLE;
         }
-        // 弹对话框
-        _showOkDialog(title: '刷新失败', content: pack.error);
       }
     });
+    if (pack.error != null) {
+      // 可能是网络失败后，从数据库中取得缓存
+      // 或网络失败后，数据库中也没有缓存
+      // 有错误信息，弹对话框
+      _showErrorDialog(pack.error);
+    }
   }
 
-  /// 上拉加载更多
+  /// 加载更多
   Future<void> _loadMore() async {
     // 此时 _loadingMoreStatus 不可能是 NEW_LIST
     // 如果已经在加载，或已加载完毕，或不在刷新的列表闲置状态，不响应
-    if (_loadingMoreStatus == LoadingMoreStatus.LOADING
-        || _loadingMoreStatus == LoadingMoreStatus.NO_MORE
-        || _refreshingStatus != RefreshingStatus.LIST_IDLE) return;
+    if (_loadingMoreStatus == _LoadingMoreStatus.LOADING
+        || _loadingMoreStatus == _LoadingMoreStatus.NO_MORE
+        || _refreshingStatus != _RefreshingStatus.LIST_IDLE) return;
     // 此时 _loadingMoreStatus 只可能是 IDLE 和 FAILED
     // 切换为正在加载
-    setState(() => _loadingMoreStatus = LoadingMoreStatus.LOADING);
+    setState(() => _loadingMoreStatus = _LoadingMoreStatus.LOADING);
     // 请求下一页
-    final pack = await getPostList(page: _lastPage + 1);
+    final pack = await getPostList(_lastPage + 1, false);
     setState(() {
-      if (pack.error == null) {
+      if (pack.partialList != null) {
         // 加载成功
-        _postList.addAll(pack.partialPostList);
+        // 可能是一次性网络或数据库成功
+        // 或网络失败后，从数据库中取得缓存
+        _postList.addAll(pack.partialList);
         if (_postList.length == pack.totalCount) {
           // 说明数据已全部加载
-          _loadingMoreStatus = LoadingMoreStatus.NO_MORE;
+          _loadingMoreStatus = _LoadingMoreStatus.NO_MORE;
         } else {
-          _loadingMoreStatus = LoadingMoreStatus.IDLE;
+          _loadingMoreStatus = _LoadingMoreStatus.IDLE;
         }
         // 页数设为下一页
         _lastPage++;
       } else {
-        // 加载失败，弹对话框
-        _loadingMoreStatus = LoadingMoreStatus.FAILED;
-        _showOkDialog(title: '加载失败', content: pack.error);
+        // 加载失败
+        // 可能是网络失败后，数据库中也没有缓存
+        // 如果是初始刷新，切换为初始失败
+        _loadingMoreStatus = _LoadingMoreStatus.FAILED;
       }
     });
+    if (pack.error != null) {
+      // 可能是网络失败后，从数据库中取得缓存
+      // 或网络失败后，数据库中也没有缓存
+      // 有错误信息，弹对话框
+      _showErrorDialog(pack.error);
+    }
   }
 
-  /// 显示只有一个 OK 按钮的对话框
-  Future<void> _showOkDialog({String title, String content}) async {
+  /// 显示错误提示对话框
+  Future<void> _showErrorDialog(String content) async {
     return showDialog<void>(
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: Text(title),
+          title: Text('错误'),
           content: Text(content),
           actions: <Widget>[
             FlatButton(
